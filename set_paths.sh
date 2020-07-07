@@ -1,0 +1,13 @@
+export BUNNY_HACKERS_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+export VULNERABILITY_BUNNY_DIR=$BUNNY_HACKERS_DIR"/vulnerability_bunny"
+export DRMEMORY_DIR=$BUNNY_HACKERS_DIR"/drmemory"
+export DYNAMORIO_DIR=$BUNNY_HACKERS_DIR"/dynamorio"
+export UTILITY_BUNNY_DIR=$BUNNY_HACKERS_DIR"/utility_bunny"
+export SLICER_BUNNY_DIR=$BUNNY_HACKERS_DIR"/slicer_bunny"
+export INSTRUMENTATION_BUNNY_DIR=$BUNNY_HACKERS_DIR"/instrumentation_bunny"
+export TAINT_BUNNY_DIR=$BUNNY_HACKERS_DIR"/taint_bunny"
+export PATH_BUNNY_DIR=$BUNNY_HACKERS_DIR"/path_bunny"
+export CFI_BUNNY_DIR=$BUNNY_HACKERS_DIR"/cfi_bunny"
+export VULNERANILITY_BUNNY_DIR=$BUNNY_HACKERS_DIR"/vulnerability_bunny"
+
+export DB_RUN="$DYNAMORIO_DIR/install/bin32/drrun -vm_size 200M -syntax_intel -max_bb_instrs 40 -opt_cleancall 2 -disable_traces"
