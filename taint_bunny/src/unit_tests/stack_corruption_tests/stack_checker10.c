@@ -1,0 +1,200 @@
+/*
+ * stack_checker.c
+ *
+ *      Author: john
+ */
+
+#include "dr_defines.h"
+#include "instrumentation_bunny.h"
+#include "taint_bunny.h"
+#include <inttypes.h>
+#include <string.h>
+
+tb_cc_taint_policy_t taint_policy;
+
+void *taint_bunny;
+void *fd_input_ctx;
+void *ret_checker;
+
+static void event_exit() {
+
+	ib_unregister_instrum_tool(ret_checker);
+	ub_ev_fd_input_destroy_ctx(fd_input_ctx);
+
+	tb_cc_exit(taint_bunny);
+	ib_exit();
+	drmgr_exit();
+}
+
+static void got_read(ub_fd_input_data_t *input_data) {
+
+    DR_ASSERT(taint_policy.get_default_label);
+
+	ub_input_buf_t *input_buf = (ub_input_buf_t *) ub_list_get_ith_value(
+			input_data->buf_list, 0);
+
+	if (input_data->type == UB_FD_FILE) {
+
+		if (strstr(input_data->source_info.file_info.base_name, ".so") == NULL) {
+
+			tb_taint_mem_block(taint_bunny, (uintptr_t) input_buf->buf,
+					input_buf->size, taint_policy.get_default_label());
+		}
+	}else{
+
+		tb_taint_mem_block(taint_bunny, (uintptr_t) input_buf->buf,
+				input_buf->size, taint_policy.get_default_label());
+	}
+}
+
+static void ret_check() {
+
+	ub_opnd_access_t ret_addr_slot;
+	ret_addr_slot.opnd_field = UB_SRC_OPND_2;
+	ret_addr_slot.comp_field = UB_COMP_1;
+
+	uintptr_t xsp_val = ib_get_comp_opnd(dr_get_current_drcontext(), &ret_addr_slot);
+
+	void *val;
+	dr_safe_read((void *)xsp_val, 4, &val, NULL);
+
+	if (tb_is_some_mem_tainted(taint_bunny, xsp_val, sizeof(void*))) {
+		dr_fprintf(STDERR, "Error: Stack Corruption detected at %p %d %p %p",
+				ib_get_pc(dr_get_current_drcontext()), sizeof(void*), xsp_val, val);
+		dr_exit_process(0);
+	}
+}
+
+static void instrument_ret_checker(void *drcontext, instrlist_t *ilist,
+		instr_t *where, instr_t *app_instr, void *user_data, void *spill_data) {
+
+	dr_insert_clean_call(drcontext, ilist, where, ret_check, false, 0);
+}
+
+static void register_ret_checker() {
+
+    ret_checker = ib_register_instrum_tool();
+    ib_insert_hndle_data_t hndle_data;
+    hndle_data.user_data = NULL;
+    hndle_data.user_instrum_func = instrument_ret_checker;
+    hndle_data.spill_reg_func = NULL;
+    hndle_data.restore_reg_func = NULL;
+    hndle_data.spilling_user_data = NULL;
+
+    ib_hook_cache_to_instr_ex(ret_checker, OP_ret, &hndle_data,
+            IB_OPT_ADDR_OPND_INFO | IB_OPT_PC_INFO | IB_OPT_FULL_OPND_INFO, IB_INSTRUM_BEFORE, ub_is_ret_instr, IB_GUARD_HOOK);
+}
+
+
+void failed(instr_t *instr) {
+
+    instr_disassemble(dr_get_current_drcontext(), instr, STDERR);
+    DR_ASSERT(false);
+
+}
+
+static void test(void *pc, void *tb) {
+
+    instr_t instr;
+    instr_init(dr_get_current_drcontext(), &instr);
+    decode(dr_get_current_drcontext(), pc, &instr);
+
+    void *drcontext = dr_get_current_drcontext();
+
+    int sources = instr_num_srcs(&instr);
+    int destinations = instr_num_dsts(&instr);
+
+    dr_mcontext_t mcontext = { sizeof(mcontext), DR_MC_ALL, };
+    dr_get_mcontext(drcontext, &mcontext);
+
+    if (instr_is_rep_string_op(&instr)) {
+        instr_free(dr_get_current_drcontext(), &instr);
+        return;
+    }
+
+    if (instr_get_opcode(&instr) == OP_lea) {
+        instr_free(dr_get_current_drcontext(), &instr);
+        return;
+    }
+
+
+    ub_instr_dataflow_t flow_info;
+    ub_dataflow_get_info(&instr, &flow_info);
+
+    if (ub_dataflow_num_flows(&flow_info) == 0) {
+        instr_free(dr_get_current_drcontext(), &instr);
+        return;
+    }
+
+    for (int iflow = 0; iflow < ub_dataflow_num_flows(&flow_info); iflow ++){
+
+        for (int i = 0; i < ub_dataflow_flow_num_srcs(&flow_info, iflow); i++){
+
+            opnd_t src_opnd = ub_dataflow_get_flow_src(&instr, &flow_info, iflow, i);
+
+            if (opnd_is_memory_reference(src_opnd)) {
+
+                if (tb_is_mem_all_tainted(taint_bunny,
+                        (uintptr_t) opnd_compute_address(src_opnd, &mcontext), 1)){
+                    dr_fprintf(STDERR, "src mem");
+                    failed(&instr);
+                }
+
+            } else if (ub_opnd_is_reg(&src_opnd)) {
+
+                if (tb_is_some_reg_byte_tainted(taint_bunny, drcontext,
+                        opnd_get_reg(src_opnd))){
+                    dr_fprintf(STDERR, "src reg %s\n", get_register_name(opnd_get_reg(src_opnd)));
+                    failed(&instr);
+                }
+            }
+        }
+
+        opnd_t dst_opnd = ub_dataflow_get_flow_dst(&instr, &flow_info, iflow);
+
+        if (opnd_is_memory_reference(dst_opnd)) {
+
+            if (tb_is_mem_all_tainted(taint_bunny,
+                    (uintptr_t) opnd_compute_address(dst_opnd, &mcontext), 1)){
+                dr_fprintf(STDERR, "dst mem");
+                failed(&instr);
+            }
+
+        } else if (ub_opnd_is_reg(&dst_opnd)) {
+
+            if (tb_is_some_reg_byte_tainted(taint_bunny, drcontext,
+                    opnd_get_reg(dst_opnd))){
+                dr_fprintf(STDERR, "dst reg");
+                failed(&instr);
+            }
+        }
+    }
+
+    instr_free(dr_get_current_drcontext(), &instr);
+}
+
+DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
+
+	drmgr_init();
+    ib_init_debug(NULL, test, NULL);
+
+	tb_cc_initialise_bitwise_taint_policy(&taint_policy);
+
+	tb_options_t te_options;
+	te_options.enable_inline = true;
+    te_options.enable_taint_off = false;
+    te_options.enable_fp = true;
+
+	taint_bunny = tb_cc_init(id, IB_OPT_BARE, &te_options, NULL, &taint_policy);
+
+	tb_register_hooks(taint_bunny);
+	register_ret_checker();
+
+	fd_input_ctx = ub_ev_fd_input_init_ctx(got_read, true,
+			UB_EV_FD_INPUT_OPT_LOCAL_SOCKET | UB_EV_FD_INPUT_OPT_SOURCE_INFO
+					| UB_EV_FD_INPUT_OPT_REMOTE_SOCKET
+					| UB_EV_FD_INPUT_OPT_FILE, id);
+
+
+	dr_register_exit_event(event_exit);
+}

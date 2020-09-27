@@ -1,0 +1,2 @@
+WARNING: cannot find /home/john/Taint-Evaluator/engines/dynamic_bunnies/The-Dynamic-Bunnies/dynamorio/install/bin32/../lib32/debug/libdynamorio.so: is this an incomplete installation?
+ERROR: Failed to create process for "/home/john/Taint-Evaluator/engines/dynamic_bunnies/The-Dynamic-Bunnies/taint_bunny/tools/taint_dummy/scripts/linux/combo_tests/2": 
