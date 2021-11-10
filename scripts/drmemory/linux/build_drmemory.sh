@@ -1,7 +1,6 @@
 git clone https://github.com/johnfxgalea/drmemory
 cd drmemory
 
-git checkout my_mods
 git checkout 1cdbe394c6032ee96ca813683
 
 make/git/devsetup.sh
